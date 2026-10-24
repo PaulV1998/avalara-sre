@@ -1,0 +1,31 @@
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "slo-eval"
+dynamic = ["version"]
+description = "Evaluate SLIs against SLO targets, compute the remaining error budget, and decide whether to alert."
+readme = "README.md"
+requires-python = ">=3.11"
+# Runtime is stdlib-only on purpose: the zipapp artifact needs nothing but python3.
+dependencies = []
+
+[project.scripts]
+slo-eval = "slo_eval.cli:main"
+
+[tool.setuptools.dynamic]
+version = { attr = "slo_eval.__version__" }
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+src = ["src"]
+
+[tool.ruff.lint]
+select = ["E", "W", "F", "I", "B", "UP", "SIM", "PT", "RUF"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]
+addopts = ["-ra", "--strict-markers", "--strict-config"]

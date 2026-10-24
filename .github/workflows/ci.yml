@@ -1,0 +1,46 @@
+name: ci
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  check-and-build:
+    name: check & build (py${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        # Oldest supported CPython and the version used for local development.
+        python-version: ["3.11", "3.13"]
+    steps:
+      # Actions are pinned to commit SHAs because tags are mutable; comments record the version.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+          cache-dependency-path: requirements-dev.txt
+
+      - name: Lint and test
+        run: make check
+
+      - name: Build and smoke-test artifact
+        run: make build
+
+      - name: Upload artifact
+        if: matrix.python-version == '3.13'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: slo-eval-pyz
+          path: dist/slo-eval.pyz
+          if-no-files-found: error

@@ -1,0 +1,9 @@
+# Pinned dev/CI tooling. The tool itself has no runtime dependencies.
+# Top-level: pytest, ruff. The rest are pytest's transitive dependencies.
+# To upgrade: install new top-level versions in a fresh venv and re-run `pip freeze`.
+iniconfig==2.3.1
+packaging==26.3
+pluggy==1.7.0
+Pygments==2.21.0
+pytest==9.1.1
+ruff==0.17.2
