@@ -1,0 +1,12 @@
+{"timestamp": "2026-10-23T14:00:01Z", "success": true, "latency_ms": 112}
+{"timestamp": "2026-10-23T14:00:04Z", "success": true, "latency_ms": 87}
+{"timestamp": "2026-10-23T14:00:09Z", "success": true, "latency_ms": 143.5}
+{"timestamp": "2026-10-23T14:00:12Z", "success": false, "latency_ms": 121}
+{"timestamp": "2026-10-23T14:00:18Z", "success": true, "latency_ms": 300}
+{"timestamp": "2026-10-23T14:00:23Z", "success": true, "latency_ms": 96}
+{"timestamp": "2026-10-23T14:00:27Z", "success": true, "latency_ms": 412}
+{"timestamp": "2026-10-23T14:00:31Z", "success": true, "latency_ms": 158}
+{"timestamp": "2026-10-23T14:00:38Z", "success": false, "latency_ms": null}
+{"timestamp": "2026-10-23T14:00:44Z", "success": true, "latency_ms": 74}
+{"timestamp": "2026-10-23T14:00:52Z", "success": true, "latency_ms": 189}
+{"timestamp": "2026-10-23T14:00:57Z", "success": true, "latency_ms": 131}

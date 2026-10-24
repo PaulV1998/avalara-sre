@@ -1,0 +1,41 @@
+# SLO policy for checkout-api in production.
+# slo-eval evaluates it against a batch of request records (see examples/sample.jsonl).
+# Each target and threshold is documented next to the reason it was chosen.
+
+service = "checkout-api"
+environment = "prod"
+
+# Rolling SLO window that ends at the evaluation time.
+window = "30d"
+
+# A window with fewer valid requests than this is too small to judge; its result is "unknown".
+min_requests = 10
+
+# Availability: share of requests that succeeded.
+# 99.9% over 30 days allows 1 failed request in 1,000 (about 43 minutes of full outage).
+[[slo]]
+name = "availability"
+objective = 0.999
+impact = "Customers see errors when checking out and cannot complete their order."
+runbook = "https://runbooks.example.com/checkout-api#availability"
+
+# Latency: share of successful requests that completed within threshold_ms.
+# 99% within 300 ms keeps checkout responsive; slower requests are where carts get abandoned.
+[[slo]]
+name = "latency"
+objective = 0.99
+threshold_ms = 300
+impact = "Checkout is slow; customers may abandon their cart."
+runbook = "https://runbooks.example.com/checkout-api#latency"
+
+# Burn-rate alerts (multiwindow, multi-burn-rate, from the Google SRE Workbook).
+# Burn rate = share of bad requests / (1 - objective). At 1.0 the budget lasts exactly the window.
+# A rule fires only when BOTH windows reach its burn rate: the long window ignores short blips,
+# the short window lets the alert clear soon after recovery.
+[alerts]
+# 14.4x for 1h spends 2% of a 30-day budget in one hour: act now.
+critical = { burn_rate = 14.4, long_window = "1h", short_window = "5m" }
+# 6x for 6h spends 5% of a 30-day budget in six hours: look at it soon.
+warning = { burn_rate = 6, long_window = "6h", short_window = "30m" }
+# Also warn when 25% or less of the budget is left; catches slow leaks that never reach 6x.
+budget_warning_remaining = 0.25
