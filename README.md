@@ -89,14 +89,21 @@ fields are rejected, so a typo cannot pass silently. Two rules are deliberate ch
 
 | Field | Rules |
 |---|---|
-| `timestamp` | When the request completed. ISO 8601 with a timezone (`Z` or an offset such as `+02:00`) |
+| `timestamp` | When the request completed. ISO 8601 with a timezone (`Z` or an offset such as `+02:00`) and at most 6 fractional-second digits; converted to UTC |
 | `success` | `true` or `false`, decided upstream (see below) |
 | `latency_ms` | Number ≥ 0. Required when `success` is `true`; may be `null` or missing when it is `false`, because a timeout often has no latency |
 
 `success` is classified by whatever collects the telemetry, not by this tool. Whether a 404 or a 429
 counts as a failure differs per service, so the evaluator does not hard-code HTTP rules; this also
-lets it work for non-HTTP traffic such as queue consumers or batch jobs. Records may be in any order;
-blank lines and unknown fields are ignored.
+lets it work for non-HTTP traffic such as queue consumers or batch jobs. Records may be in any order,
+and unknown fields are ignored.
+
+The file is UTF-8 without a byte order mark (BOM), one JSON object per line. Accepting a BOM would be
+a legitimate compatibility choice; rejecting it simply follows that format contract. A line holding
+only JSON whitespace (spaces, tabs, line endings) is blank and skipped. `NaN` and `Infinity` are not
+JSON numbers and are rejected. Python's `datetime.fromisoformat` silently truncates fractions of a
+second beyond microseconds, so a timestamp with more than 6 fractional digits is rejected rather than
+quietly changed.
 
 In the sample, line 4 is a failure that has a latency, line 5 sits exactly on the 300 ms threshold
 (it counts as fast), line 7 is slow, and line 9 is a failure without a latency.
@@ -172,7 +179,11 @@ any SLO is not met, `null` if any SLO lacks the data to judge, and `true` otherw
   Every independent problem is reported in one go, each with its location (e.g.
   `slo[1].objective`), so a file can be fixed in one pass. A check that depends on an invalid field
   is skipped, so one mistake does not cause a cascade of messages; a TOML syntax error reports only
-  the parser's first error. The policy is strict, because it is written by hand and a typo should
+  the parser's first error. For records, each invalid line gets one message listing all of its
+  problems, numbered by its position in the file (blank lines included). The first 10 are listed,
+  and the summary counts invalid lines out of all non-blank lines, e.g. `3 of 1,204 non-blank lines
+  invalid`: a line with several problems counts once, and the display limit changes neither total.
+  The policy is strict, because it is written by hand and a typo should
   not pass silently; records are lenient about extra fields, so telemetry can carry more data than
   the tool needs.
   - Policy: unreadable, not UTF-8 or malformed TOML; missing or unexpected fields; names outside
@@ -183,8 +194,11 @@ any SLO is not met, `null` if any SLO lacks the data to judge, and `true` otherw
     level outside `0 <= level < 1`; a zero or negative threshold or burn rate; a `min_requests`
     that is not a whole number of at least 1; an unknown or duplicate SLO name, or no SLO at all; a
     short window not shorter than its long window; a long window longer than the SLO window.
-  - Records: a line that is not a JSON object, missing fields, a timestamp without a timezone, a
-    `success` that is not `true` or `false`, a latency that is negative or not a number.
+  - Records: a line that is not valid UTF-8, starts with a BOM, is not valid JSON or is not a JSON
+    object; `NaN` or `Infinity`; a number too large to decode; a missing `timestamp` or `success`;
+    a timestamp that is not ISO 8601, has no timezone, has more than 6 fractional-second digits, or
+    is out of range once converted to UTC; a `success` that is not `true` or `false`; a latency that
+    is negative or not a number, or missing when `success` is `true`.
 
 ### Output
 
