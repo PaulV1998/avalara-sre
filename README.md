@@ -147,20 +147,37 @@ while availability does not.
 
 ### Severity
 
-Each rule either fires, does not fire, or cannot be evaluated because a window it needs has fewer
-than `min_requests` valid requests. An SLO's tag is the worst outcome of its rules, and the report's
-overall tag is the worst across SLOs, in the order `critical` > `warning` > `unknown` > `ok`. A
-window that cannot be evaluated keeps its reason in the report even when another rule sets a higher
-tag. Stale data, for example, leaves the recent windows empty while the SLO window can still show an
-overspent budget: the result is then `warning`, with the empty windows still listed and explained.
+Each SLO is checked by three rules (values from the example policy):
 
-| Tag | When (values from the example policy) | Typical handling, outside this tool |
+| Rule | Fires when | Raises |
 |---|---|---|
-| `critical` | Burn rate ≥ 14.4 over **both** the last 1h and the last 5m | Page on-call |
-| `warning` | Burn rate ≥ 6 over both the last 6h and the last 30m, **or** 25% or less of the budget left | Ticket or team channel |
-| `unknown` | Too few valid requests to judge: in the SLO window, or in a window a rule needs | Check whether requests are arriving and telemetry is flowing |
-| `ok` | None of the above | Nothing |
+| `fast_burn` | Burn rate ≥ 14.4 over **both** the 1h and the 5m window | `critical` |
+| `slow_burn` | Burn rate ≥ 6 over **both** the 6h and the 30m window | `warning` |
+| `low_budget` | 25% or less of the error budget left in the SLO window | `warning` |
 
+Each rule fires, does not fire, or cannot be evaluated. A burn-rate rule needs both of its windows
+at or above the threshold, so one window known to be below it is enough to say the rule does not
+fire, even if the other window has too few requests; the rule cannot be evaluated only when no window
+rules it out and at least one lacks data. Every window that lacks data is reported as a diagnostic,
+e.g. `fast_burn 5m window: insufficient_requests: observed 4, required 10`, whatever the outcome of
+its rule.
+
+An SLO's tag comes from its rules, and the overall tag is the worst SLO tag, in the order
+`critical` > `warning` > `unknown` > `ok`. Stale data, for example, leaves the recent windows empty
+while the SLO window can still show an overspent budget: the result is then `warning`, with the empty
+windows still listed as diagnostics.
+
+| Tag | When | Typical handling, outside this tool |
+|---|---|---|
+| `critical` | `fast_burn` fires | Page on-call |
+| `warning` | `slow_burn` or `low_budget` fires, and `fast_burn` does not | Ticket or team channel |
+| `unknown` | No rule fires, and at least one rule cannot be evaluated | Check whether requests are arriving and telemetry is flowing |
+| `ok` | Every rule is known not to fire | Nothing |
+
+- `ok` means that no alert condition is established. It does not guarantee complete telemetry, and
+  the rules are not a telemetry-freshness check: if telemetry stops after healthy traffic, a long
+  window can stay below its threshold while the short window empties, so the result can stay `ok`
+  for a while. The diagnostics still show the gap.
 - The burn-rate rules are the multiwindow, multi-burn-rate alerts from the Google SRE Workbook. The
   long window ignores short blips and the short window lets the alert clear soon after recovery,
   which is what stops the tool from paging on every transient spike.
@@ -173,6 +190,49 @@ The report also answers "is the service within its objective?" with `within_obje
 any SLO is not met, `null` if any SLO lacks the data to judge, and `true` otherwise. It depends only
 on each SLO's own window, never on whether the shorter alert windows have enough data.
 
+### Alerts and integrations
+
+Every SLO gets a decision with the same identifying fields, whether it alerts or not; an SLO tagged
+`warning` or `critical` is an alert. A decision carries:
+
+- `service`, `environment`, `slo`, and `evaluated_at`, which is the evaluation time, never the clock
+- `severity`, `dedup_key` and `triggered_rules`
+- `summary`, `impact`, `runbook` and `next_action`
+- every rule's outcome with its exact measurements and configured threshold, per window (the 1h and
+  5m burn rates separately, for example), and the diagnostics for windows that lack data
+
+When several rules fire, the first in the order `fast_burn`, `slow_burn`, `low_budget` is the
+primary rule. It picks the summary, the next action, and the window whose counts the impact quotes:
+the long window of a burn-rate rule, or the SLO window for `low_budget`. All firing rules and
+diagnostics are kept. The impact is the policy's text plus counts that match the signal: for
+availability "1,240 of 59,800 requests failed in the 1h window", for latency "N of M successful
+requests exceeded 300 ms in the 6h window".
+
+| Primary rule | Next action |
+|---|---|
+| `fast_burn` | Investigate immediately: elevated budget consumption was observed in the recent evaluation windows. Follow the runbook. |
+| `slow_burn` | Investigate soon: sustained elevated budget consumption was observed in the evaluation windows. Follow the runbook. |
+| `low_budget` | Review recent incidents and budget consumption; follow the team's release/error-budget policy. |
+| none (`unknown`) | Check whether requests are arriving and telemetry is flowing. |
+
+The next actions avoid claims the data cannot support: a windowed measurement, possibly evaluated at
+a past `--at`, does not prove what customers see right now, and the input does not define a release
+policy.
+
+**Integrations.** The tool is stateless: each run reports the current decisions, and the paging or
+incident system owns opening, updating and resolving incidents. An integration should read the tags
+as follows:
+
+- `warning` or `critical`: a firing state for the SLO's `dedup_key`.
+- `ok`: known clear, which can support resolving that key's incident.
+- `unknown`: insufficient evidence, which must not be read as recovery.
+
+An SLO that is not an alert, or a run without any alerts, therefore does not mean "resolve every
+open incident". The `dedup_key` is `service:environment:slo` and deliberately leaves out severity,
+rule and time, so a `warning` that becomes `critical` updates the same incident. Availability and
+latency keep separate keys, but one dependency outage can affect both, so a paging system may group
+alerts by service and environment to avoid two pages for one incident.
+
 ### Edge cases
 
 - **Boundary values.** Numbers are never binary floats: whole numbers stay integers and other
@@ -183,11 +243,12 @@ on each SLO's own window, never on whether the shorter alert windows have enough
   includes its boundary: SLI ≥ objective, burn rate ≥ threshold, budget left ≤ warning level,
   latency ≤ threshold. A record exactly at `end` is inside the window; one exactly at
   `end - window` is not.
-- **Missing data.** A window with fewer than `min_requests` valid requests is not judged; its
-  reason is reported, and the tag is `unknown` unless another rule gives `warning` or `critical`.
-  In request records, "no traffic" and "telemetry stopped" look the same, so an empty window is
-  never treated as proof of either: the tool says it cannot tell instead of guessing. A missing
-  `latency_ms` is fine on a failed request and invalid on a successful one.
+- **Missing data.** A window with fewer than `min_requests` valid requests is not judged, and its
+  reason is always reported as a diagnostic. It makes its rule impossible to evaluate, and the tag
+  `unknown`, only when no other window rules that rule out and no other rule fires (see
+  [Severity](#severity)). In request records, "no traffic" and "telemetry stopped" look the same, so
+  an empty window is never treated as proof of either: the tool says it cannot tell instead of
+  guessing. A missing `latency_ms` is fine on a failed request and invalid on a successful one.
 - **Empty window.** No records in the window, or an empty file, gives `unknown`. It is never
   reported as 100% healthy, and never as a breach.
 - **Invalid input** is rejected with a clear message and an exit code separate from the four tags.
@@ -219,12 +280,12 @@ on each SLO's own window, never on whether the shorter alert windows have enough
 
 ### Output
 
-A JSON report by default, or a short text summary. For each SLO it includes the SLI, objective,
-whether it is met, the error budget, burn rates, the tag with its reasons, the customer impact (the
-policy text plus numbers, e.g. "about 1,240 failed requests in the last hour"), the runbook link, the
-next action and a `dedup_key` (`service:environment:slo`), which lets a paging system update one
-open incident instead of opening a new one on every run. An `alert` block states the decision
-explicitly. The exit code follows the overall tag: `0` ok, `1` warning, `2` critical, `3` unknown.
+A JSON report by default, or a short text summary. It contains the evaluation window and record
+counts, `within_objective`, and for each SLO the SLI, objective, whether it is met, the error
+budget, the burn rates and the decision described above; an `alert` block lists the SLOs that are
+alerts, with the overall severity. Values stay exact until this point and are only formatted here,
+as decimals and percentages. The exit code follows the overall tag: `0` ok, `1` warning,
+`2` critical, `3` unknown.
 
 ### Assumptions
 
