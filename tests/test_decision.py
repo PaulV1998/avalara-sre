@@ -160,19 +160,34 @@ def test_a_burn_in_only_one_window_does_not_fire(fast: tuple[object, object]) ->
 # --- missing windows ----------------------------------------------------------------------------
 
 
-def test_a_window_below_threshold_disproves_the_rule_while_the_gap_is_still_reported() -> None:
-    decision = one(fast=("0.3", GAP))
+@pytest.mark.parametrize(
+    ("fast", "missing"),
+    [((Fraction("14.39"), GAP), "5m"), ((GAP, Fraction("14.39")), "1h")],
+    ids=["short window lacks data", "long window lacks data"],
+)
+def test_a_window_below_threshold_disproves_the_rule_while_the_gap_is_still_reported(
+    fast: tuple[object, object], missing: str
+) -> None:
+    decision = one(fast=fast)
 
     assert decision.rules[0].outcome is Outcome.NOT_FIRING
     assert decision.severity is Severity.OK
-    assert decision.diagnostics == (f"fast_burn 5m window: {GAP_REASON}",)
+    assert decision.diagnostics == (f"fast_burn {missing} window: {GAP_REASON}",)
 
 
-def test_a_window_at_threshold_with_the_other_lacking_data_cannot_be_evaluated() -> None:
-    decision = one(fast=(20, GAP))
+@pytest.mark.parametrize(
+    ("fast", "missing"),
+    [((Fraction("14.4"), GAP), "5m"), ((GAP, Fraction("14.4")), "1h")],
+    ids=["short window lacks data", "long window lacks data"],
+)
+def test_a_window_at_threshold_with_the_other_lacking_data_cannot_be_evaluated(
+    fast: tuple[object, object], missing: str
+) -> None:
+    decision = one(fast=fast)
 
     assert decision.rules[0].outcome is Outcome.CANNOT_EVALUATE
-    assert decision.diagnostics == (f"fast_burn 5m window: {GAP_REASON}",)
+    assert decision.severity is Severity.UNKNOWN
+    assert decision.diagnostics == (f"fast_burn {missing} window: {GAP_REASON}",)
 
 
 def test_stale_data_gives_a_warning_that_keeps_every_gap() -> None:
