@@ -58,15 +58,27 @@ next to the reason it was chosen.
 
 | Field | Meaning |
 |---|---|
-| `service`, `environment` | What the policy covers, e.g. `checkout-api` in `prod` |
-| `window` | SLO window, e.g. `30d`. Durations use `s`, `m`, `h` or `d` |
-| `min_requests` | Fewest valid requests a window needs before it is judged |
-| `[[slo]]` `name` | `availability` or `latency`, each at most once |
+| `service`, `environment` | What the policy covers, e.g. `checkout-api` in `prod`. Must follow the naming convention below |
+| `window` | SLO window, e.g. `30d`. A duration is a whole number above 0 and one unit: `s`, `m`, `h` or `d` |
+| `min_requests` | Fewest valid requests a window needs before it is judged; a whole number, at least 1 |
+| `[[slo]]` `name` | `availability` or `latency`, each at most once; at least one SLO is required |
 | `[[slo]]` `objective` | Target share of good requests, strictly between 0 and 1, e.g. `0.999` |
-| `[[slo]]` `threshold_ms` | Latency SLO only: a request is fast if `latency_ms <= threshold_ms` |
+| `[[slo]]` `threshold_ms` | Latency SLO only, above 0: a request is fast if `latency_ms <= threshold_ms` |
 | `[[slo]]` `impact`, `runbook` | Customer-impact text and runbook link, copied into the alert |
-| `[alerts]` `critical`, `warning` | Burn-rate rules, each with `burn_rate`, `long_window`, `short_window` |
-| `[alerts]` `budget_warning_remaining` | Warn when this share of the budget or less is left, e.g. `0.25` |
+| `[alerts]` `critical`, `warning` | Burn-rate rules, each with `burn_rate` (above 0), `long_window`, and a shorter `short_window`. `long_window` may not exceed `window` |
+| `[alerts]` `budget_warning_remaining` | Warn when this share of the budget or less is left, e.g. `0.25`; at least 0 and below 1 |
+
+Every field is required except `threshold_ms`, which only the latency SLO takes, and unexpected
+fields are rejected, so a typo cannot pass silently. Two rules are deliberate choices:
+
+- **Naming convention.** `service` and `environment` use ASCII letters, digits, `.`, `_` and `-`,
+  starting with a letter or digit. Strictly, only `:` has to be excluded, to keep the `dedup_key`
+  (`service:environment:slo`) unambiguous; the rest is a convention that keeps names predictable in
+  keys, labels, file paths and command lines. Supporting existing names outside it would call for
+  encoding each part of the key rather than forcing renames, which this exercise does not need.
+- **Budget warning level.** At `0`, the tool warns whenever the budget is exactly exhausted or
+  overspent. `1` is excluded because every evaluable window has `remaining <= 1`, so even a
+  perfectly healthy service would warn.
 
 **Request records:** JSON Lines, one request per line
 ([`examples/sample.jsonl`](examples/sample.jsonl)):
@@ -142,10 +154,13 @@ any SLO is not met, `null` if any SLO lacks the data to judge, and `true` otherw
 
 ### Edge cases
 
-- **Boundary values.** All maths uses exact fractions (`fractions.Fraction`, with policy numbers
-  read as decimals), so an SLI of exactly 99.9% meets a 99.9% objective with no rounding surprises.
-  Every comparison includes its boundary: SLI ≥ objective, burn rate ≥ threshold, budget left ≤
-  warning level, latency ≤ threshold. A record exactly at `end` is inside the window; one exactly at
+- **Boundary values.** Numbers are never binary floats: whole numbers stay integers and other
+  numbers are read as `Decimal`. Reading decimals exactly is not enough on its own, because decimal
+  division rounds too, so SLIs, burn rates and budgets are calculated as exact fractions (e.g.
+  `Fraction(good, valid)`) and compared with exactly built targets; floats appear only when the
+  report is displayed. An SLI of exactly 99.9% therefore meets a 99.9% objective. Every comparison
+  includes its boundary: SLI ≥ objective, burn rate ≥ threshold, budget left ≤ warning level,
+  latency ≤ threshold. A record exactly at `end` is inside the window; one exactly at
   `end - window` is not.
 - **Missing data.** A window with fewer than `min_requests` valid requests is not judged and yields
   `unknown`. In request records, "no traffic" and "telemetry stopped" look the same, so the tool says
@@ -154,12 +169,18 @@ any SLO is not met, `null` if any SLO lacks the data to judge, and `true` otherw
 - **Empty window.** No records in the window, or an empty file, gives `unknown`. It is never
   reported as 100% healthy, and never as a breach.
 - **Invalid input** is rejected with a clear message and an exit code separate from the four tags.
-  The policy is strict, because it is written by hand and a typo should not pass silently; records
-  are lenient about extra fields, so telemetry can carry more data than the tool needs.
-  - Policy: unreadable or malformed TOML, missing or unknown fields, an objective not strictly
-    between 0 and 1, a budget warning level not between 0 and 1, a zero or negative threshold or
-    `min_requests`, a short window not shorter than its long window, an alert window longer than the
-    SLO window.
+  Every independent problem is reported in one go, each with its location (e.g.
+  `slo[1].objective`), so a file can be fixed in one pass. A check that depends on an invalid field
+  is skipped, so one mistake does not cause a cascade of messages; a TOML syntax error reports only
+  the parser's first error. The policy is strict, because it is written by hand and a typo should
+  not pass silently; records are lenient about extra fields, so telemetry can carry more data than
+  the tool needs.
+  - Policy: unreadable, not UTF-8 or malformed TOML; missing or unexpected fields; names outside
+    the naming convention; a duration that is not a whole number above 0 with one unit; non-finite
+    numbers (`nan`, `inf`); an objective not strictly between 0 and 1; a budget warning level
+    outside `0 <= level < 1`; a zero or negative threshold or burn rate; a `min_requests` that is
+    not a whole number of at least 1; an unknown or duplicate SLO name, or no SLO at all; a short
+    window not shorter than its long window; a long window longer than the SLO window.
   - Records: a line that is not a JSON object, missing fields, a timestamp without a timezone, a
     `success` that is not `true` or `false`, a latency that is negative or not a number.
 
