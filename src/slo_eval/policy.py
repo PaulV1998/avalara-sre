@@ -1,5 +1,4 @@
-"""Read and check the service policy.
-"""
+"""Read and check the service policy."""
 
 import re
 import tomllib
@@ -21,6 +20,7 @@ SLO_NAMES: tuple[SLOName, ...] = ("availability", "latency")
 _IDENTIFIER = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*")
 _DURATION = re.compile(r"([1-9][0-9]*)([smhd])")
 _UNIT_SECONDS = {"d": 86_400, "h": 3_600, "m": 60, "s": 1}
+_MAX_EXPONENT = 100
 
 
 @dataclass(frozen=True)
@@ -74,7 +74,6 @@ def parse_policy(text: str, source: str = "<string>") -> Policy:
     except tomllib.TOMLDecodeError as exc:
         raise InputError(f"invalid policy {source}", [f"not valid TOML: {exc}"]) from exc
     except (ValueError, DecimalException) as exc:
-        # An integer over Python's 4300-digit limit, or an exponent beyond Decimal's range.
         raise InputError(
             f"invalid policy {source}", ["not valid TOML: a number is too large"]
         ) from exc
@@ -110,7 +109,7 @@ def parse_duration(value: object) -> timedelta:
     amount, unit = match.groups()
     try:
         return timedelta(seconds=int(amount) * _UNIT_SECONDS[unit])
-    except (OverflowError, ValueError):  # beyond timedelta's range, or too many digits for int()
+    except (OverflowError, ValueError):
         raise ValueError(f"is too long, got {describe(value)}") from None
 
 
@@ -254,7 +253,6 @@ def _text(value: object) -> str:
 def _number(value: object) -> int | Decimal:
     if isinstance(value, float):
         raise TypeError("binary floats are not accepted; decode numbers with parse_float=Decimal")
-    # bool is a subclass of int, so true would otherwise pass as the number 1.
     if isinstance(value, bool) or not isinstance(value, int | Decimal):
         raise ValueError(f"must be a number, got {describe(value)}")
     if isinstance(value, Decimal) and not value.is_finite():
@@ -269,22 +267,28 @@ def _positive_number(value: object) -> int | Decimal:
     return number
 
 
+def _fraction(number: int | Decimal) -> Fraction:
+    if isinstance(number, Decimal) and abs(number.as_tuple().exponent) > _MAX_EXPONENT:
+        raise ValueError(f"is too large or too precise to use exactly, got {describe(number)}")
+    return Fraction(number)
+
+
 def _objective(value: object) -> Fraction:
     number = _number(value)
     if not 0 < number < 1:
         raise ValueError(f"must be strictly between 0 and 1, got {describe(value)}")
-    return Fraction(number)
+    return _fraction(number)
 
 
 def _budget_level(value: object) -> Fraction:
     number = _number(value)
     if not 0 <= number < 1:
         raise ValueError(f"must be at least 0 and less than 1, got {describe(value)}")
-    return Fraction(number)
+    return _fraction(number)
 
 
 def _burn_rate(value: object) -> Fraction:
-    return Fraction(_positive_number(value))
+    return _fraction(_positive_number(value))
 
 
 def _min_requests(value: object) -> int:

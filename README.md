@@ -177,10 +177,12 @@ any SLO is not met, `null` if any SLO lacks the data to judge, and `true` otherw
   the tool needs.
   - Policy: unreadable, not UTF-8 or malformed TOML; missing or unexpected fields; names outside
     the naming convention; a duration that is not a whole number above 0 with one unit; non-finite
-    numbers (`nan`, `inf`); an objective not strictly between 0 and 1; a budget warning level
-    outside `0 <= level < 1`; a zero or negative threshold or burn rate; a `min_requests` that is
-    not a whole number of at least 1; an unknown or duplicate SLO name, or no SLO at all; a short
-    window not shorter than its long window; a long window longer than the SLO window.
+    numbers (`nan`, `inf`); an objective, burn rate or budget warning level too large or too
+    precise to convert exactly (an exponent beyond ±100, e.g. `1e-999999999`, whose exact
+    conversion would run for hours); an objective not strictly between 0 and 1; a budget warning
+    level outside `0 <= level < 1`; a zero or negative threshold or burn rate; a `min_requests`
+    that is not a whole number of at least 1; an unknown or duplicate SLO name, or no SLO at all; a
+    short window not shorter than its long window; a long window longer than the SLO window.
   - Records: a line that is not a JSON object, missing fields, a timestamp without a timezone, a
     `success` that is not `true` or `false`, a latency that is negative or not a number.
 

@@ -59,6 +59,7 @@ short_window = "30m"
 """
 
 NAME_RULE = "must be ASCII letters, digits, '.', '_' or '-', starting with a letter or digit"
+EXACT_RULE = "is too large or too precise to use exactly"
 DURATION_RULE = 'must be a whole number above 0 followed by s, m, h or d (e.g. "30d")'
 
 
@@ -163,6 +164,8 @@ def test_budget_warning_level_zero_is_allowed() -> None:
         ("objective = 0.999", "objective = 0.99999"),
         ("min_requests = 10", "min_requests = 1"),
         ("threshold_ms = 300", "threshold_ms = 0.5"),
+        ("objective = 0.999", "objective = 1e-100"),
+        ("burn_rate = 14.4", "burn_rate = 1e100"),
     ],
 )
 def test_boundary_values_that_are_allowed(old: str, new: str) -> None:
@@ -398,6 +401,21 @@ def test_each_missing_field_is_one_problem(line: str, path: str) -> None:
             'long_window = "1h"',
             'long_window = "1x"',
             f'alerts.critical.long_window: {DURATION_RULE}, got "1x"',
+        ),
+        (
+            "objective = 0.999",
+            "objective = 1e-101",
+            f"slo[0].objective: {EXACT_RULE}, got 1E-101",
+        ),
+        (
+            "burn_rate = 14.4",
+            "burn_rate = 1e101",
+            f"alerts.critical.burn_rate: {EXACT_RULE}, got 1E+101",
+        ),
+        (
+            "budget_warning_remaining = 0.25",
+            "budget_warning_remaining = 1e-101",
+            f"alerts.budget_warning_remaining: {EXACT_RULE}, got 1E-101",
         ),
     ],
 )

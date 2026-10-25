@@ -7,7 +7,6 @@ _MAX_SHOWN = 40
 
 
 class InputError(Exception):
-
     def __init__(self, summary: str, problems: Sequence[str] = ()) -> None:
         super().__init__(summary)
         self.summary = summary
@@ -26,12 +25,11 @@ def describe(value: object) -> str:
     elif value is None:
         text = "null"
     elif isinstance(value, str):
-        # JSON quoting makes invisible characters visible, e.g. a trailing "\n".
         text = json.dumps(value, ensure_ascii=False)
     elif isinstance(value, dict):
         text = "{...}" if value else "{}"
     elif isinstance(value, list):
         text = "[...]" if value else "[]"
     else:
-        text = str(value)  # int, Decimal, or a TOML date or time
+        text = str(value)
     return text if len(text) <= _MAX_SHOWN else text[: _MAX_SHOWN - 3] + "..."
