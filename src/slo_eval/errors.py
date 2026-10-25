@@ -3,6 +3,7 @@
 import json
 from collections.abc import Sequence
 
+BOM_PROBLEM = "starts with a byte order mark (BOM); the format is UTF-8 without a BOM"
 _MAX_SHOWN = 40
 
 
@@ -19,7 +20,6 @@ class InputError(Exception):
 
 
 def describe(value: object) -> str:
-    """Show a decoded TOML or JSON value in an error message, shortened when long."""
     if isinstance(value, bool):
         text = "true" if value else "false"
     elif value is None:

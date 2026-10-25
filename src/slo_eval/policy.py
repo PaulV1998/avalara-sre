@@ -11,7 +11,7 @@ from os import PathLike
 from pathlib import Path
 from typing import Any, Literal, TypeVar
 
-from slo_eval.errors import InputError, describe
+from slo_eval.errors import BOM_PROBLEM, InputError, describe
 
 T = TypeVar("T")
 
@@ -69,6 +69,8 @@ def load_policy(path: str | PathLike[str]) -> Policy:
 
 
 def parse_policy(text: str, source: str = "<string>") -> Policy:
+    if text.startswith("\ufeff"):
+        raise InputError(f"invalid policy {source}", [BOM_PROBLEM])
     try:
         data = tomllib.loads(text, parse_float=Decimal)
     except tomllib.TOMLDecodeError as exc:

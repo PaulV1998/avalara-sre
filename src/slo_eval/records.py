@@ -9,7 +9,7 @@ from decimal import Decimal, DecimalException
 from os import PathLike
 from typing import Any, NoReturn, TypeVar
 
-from slo_eval.errors import InputError, describe
+from slo_eval.errors import BOM_PROBLEM, InputError, describe
 
 T = TypeVar("T")
 
@@ -70,7 +70,7 @@ def _parse_line(line: bytes | str) -> Record:
     except UnicodeDecodeError as exc:
         raise _InvalidLine(f"not valid UTF-8: {exc}") from None
     if text.startswith("\ufeff"):
-        raise _InvalidLine("starts with a byte order mark (BOM); the format is UTF-8 without a BOM")
+        raise _InvalidLine(BOM_PROBLEM)
     try:
         data = json.loads(text, parse_float=Decimal, parse_constant=_reject_constant)
     except json.JSONDecodeError as exc:

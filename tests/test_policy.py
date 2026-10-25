@@ -61,6 +61,7 @@ short_window = "30m"
 NAME_RULE = "must be ASCII letters, digits, '.', '_' or '-', starting with a letter or digit"
 EXACT_RULE = "is too large or too precise to use exactly"
 DURATION_RULE = 'must be a whole number above 0 followed by s, m, h or d (e.g. "30d")'
+BOM_PROBLEM = "starts with a byte order mark (BOM); the format is UTF-8 without a BOM"
 
 
 def edit(*changes: tuple[str, str]) -> str:
@@ -567,3 +568,18 @@ def test_a_number_too_large_to_decode_is_one_problem(number: str) -> None:
     text = edit(("min_requests = 10", f"min_requests = {number}"))
 
     assert problems_in(text) == ["not valid TOML: a number is too large"]
+
+
+def test_a_byte_order_mark_is_rejected() -> None:
+    assert problems_in("\ufeff" + VALID_POLICY) == [BOM_PROBLEM]
+
+
+def test_a_file_starting_with_a_byte_order_mark_is_rejected(tmp_path: Path) -> None:
+    path = tmp_path / "policy.toml"
+    path.write_bytes(b"\xef\xbb\xbf" + VALID_POLICY.encode())
+
+    with pytest.raises(InputError) as excinfo:
+        load_policy(path)
+
+    assert excinfo.value.summary == f"invalid policy {path}"
+    assert excinfo.value.problems == [BOM_PROBLEM]

@@ -54,7 +54,8 @@ fixed time window, and returns a report that a human can read and automation can
 **Service policy:** TOML, one file per service and environment
 ([`examples/policy.toml`](examples/policy.toml)). Python reads TOML with its standard library
 (`tomllib`, the reason for Python 3.11+), and TOML allows comments, so every target is documented
-next to the reason it was chosen.
+next to the reason it was chosen. Like the records, the file is UTF-8 without a byte order mark
+(BOM).
 
 | Field | Meaning |
 |---|---|
@@ -186,14 +187,15 @@ any SLO is not met, `null` if any SLO lacks the data to judge, and `true` otherw
   The policy is strict, because it is written by hand and a typo should
   not pass silently; records are lenient about extra fields, so telemetry can carry more data than
   the tool needs.
-  - Policy: unreadable, not UTF-8 or malformed TOML; missing or unexpected fields; names outside
-    the naming convention; a duration that is not a whole number above 0 with one unit; non-finite
-    numbers (`nan`, `inf`); an objective, burn rate or budget warning level too large or too
-    precise to convert exactly (an exponent beyond ±100, e.g. `1e-999999999`, whose exact
-    conversion would run for hours); an objective not strictly between 0 and 1; a budget warning
-    level outside `0 <= level < 1`; a zero or negative threshold or burn rate; a `min_requests`
-    that is not a whole number of at least 1; an unknown or duplicate SLO name, or no SLO at all; a
-    short window not shorter than its long window; a long window longer than the SLO window.
+  - Policy: unreadable, not UTF-8, starting with a BOM, or malformed TOML; missing or unexpected
+    fields; names outside the naming convention; a duration that is not a whole number above 0 with
+    one unit; non-finite numbers (`nan`, `inf`); an objective, burn rate or budget warning level too
+    large or too precise to convert exactly (an exponent beyond ±100, e.g. `1e-999999999`, whose
+    exact conversion would run for hours); an objective not strictly between 0 and 1; a budget
+    warning level outside `0 <= level < 1`; a zero or negative threshold or burn rate; a
+    `min_requests` that is not a whole number of at least 1; an unknown or duplicate SLO name, or no
+    SLO at all; a short window not shorter than its long window; a long window longer than the SLO
+    window.
   - Records: a line that is not valid UTF-8, starts with a BOM, is not valid JSON or is not a JSON
     object; `NaN` or `Infinity`; a number too large to decode; a missing `timestamp` or `success`;
     a timestamp that is not ISO 8601, has no timezone, has more than 6 fractional-second digits, or
