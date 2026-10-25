@@ -72,7 +72,12 @@ def _parse_line(line: bytes | str) -> Record:
     if text.startswith("\ufeff"):
         raise _InvalidLine(BOM_PROBLEM)
     try:
-        data = json.loads(text, parse_float=Decimal, parse_constant=_reject_constant)
+        data = json.loads(
+            text,
+            parse_float=Decimal,
+            parse_constant=_reject_constant,
+            object_pairs_hook=_reject_duplicate_fields,
+        )
     except json.JSONDecodeError as exc:
         raise _InvalidLine(f"not valid JSON: {exc.msg} (column {exc.colno})") from None
     except (ValueError, DecimalException):
@@ -84,6 +89,15 @@ def _parse_line(line: bytes | str) -> Record:
 
 def _reject_constant(name: str) -> NoReturn:
     raise _InvalidLine(f"not valid JSON: {name} is not a JSON number")
+
+
+def _reject_duplicate_fields(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    data: dict[str, Any] = {}
+    for key, value in pairs:
+        if key in data:
+            raise _InvalidLine(f"duplicate field {describe(key)}")
+        data[key] = value
+    return data
 
 
 def _check_fields(data: Mapping[str, Any]) -> Record:

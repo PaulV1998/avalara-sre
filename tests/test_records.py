@@ -160,6 +160,15 @@ def test_a_line_that_is_not_utf8() -> None:
     assert problem(b'{"timestamp": "caf\xe9"}').startswith("not valid UTF-8: ")
 
 
+def test_a_duplicate_field_is_rejected_instead_of_keeping_the_last_value() -> None:
+    text = (
+        '{"timestamp": "2026-10-23T14:00:01Z", '
+        '"success": false, "success": true, "latency_ms": 112}'
+    )
+
+    assert problem(text) == 'duplicate field "success"'
+
+
 @pytest.mark.parametrize(
     ("fields", "expected"),
     [

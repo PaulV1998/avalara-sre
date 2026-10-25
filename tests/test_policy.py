@@ -574,6 +574,12 @@ def test_a_byte_order_mark_is_rejected() -> None:
     assert problems_in("\ufeff" + VALID_POLICY) == [BOM_PROBLEM]
 
 
+def test_a_duplicate_key_is_a_toml_error() -> None:
+    [problem] = problems_in(edit(('window = "30d"', 'window = "30d"\nwindow = "7d"')))
+
+    assert problem.startswith("not valid TOML: Cannot overwrite a value")
+
+
 def test_a_file_starting_with_a_byte_order_mark_is_rejected(tmp_path: Path) -> None:
     path = tmp_path / "policy.toml"
     path.write_bytes(b"\xef\xbb\xbf" + VALID_POLICY.encode())

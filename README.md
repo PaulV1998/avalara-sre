@@ -113,12 +113,17 @@ In the sample, line 4 is a failure that has a latency, line 5 sits exactly on th
 
 1. **Validate** both files. One invalid record rejects the whole batch, with line numbers in the
    error: silently skipping bad records could hide exactly the failures being measured.
-2. **Pick the window.** It ends at the evaluation time (`--at`, or the latest record if not given)
-   and covers `window` before it: `(end - window, end]`. Records outside it are ignored and counted
-   in the report.
-3. **Count** valid and good requests for the SLO window and for each alert window (5m, 30m, 1h and
-   6h, all ending at `end`). All later maths uses only these counts, so the same core could take
-   pre-aggregated counts from a monitoring system instead of raw records.
+2. **Pick the window.** It ends at the evaluation time `end`: `--at` if given, otherwise the
+   current time. The evaluator itself never reads the clock, so tests and examples always pass an
+   explicit time. `end` is converted to UTC before any window is subtracted, so a daylight-saving
+   change cannot stretch or shrink a window. The SLO window is `(end - window, end]`, and every
+   record falls into exactly one group, all three counted in the report: before the window
+   (including exactly at `end - window`), inside it, or after `end`. A window too long to subtract
+   from `end` (it would reach before year 1) has no lower bound.
+3. **Count** valid and good requests for the SLO window and for each distinct alert window in the
+   policy (5m, 30m, 1h and 6h in the example), all ending at `end`. All later maths uses only these
+   counts, so the same core could take pre-aggregated counts from a monitoring system instead of
+   raw records.
 4. **Calculate** for each SLO:
 
 | | Availability | Latency |
@@ -129,24 +134,31 @@ In the sample, line 4 is a failure that has a latency, line 5 sits exactly on th
 
 - **SLO met** when `SLI >= objective`.
 - **Error budget:** allowed bad requests = `(1 - objective) × valid`, and budget left =
-  `1 - bad ÷ allowed`. Below zero means the budget is overspent.
+  `1 - bad ÷ allowed`. Below zero means the budget is overspent; it is never clamped to zero.
 - **Burn rate** of a window = `(bad ÷ valid) ÷ (1 - objective)`. At 1.0 the budget lasts exactly
   the SLO window; at 14.4 a 30-day budget is gone in about two days.
+- **Too little data.** A window with fewer than `min_requests` valid requests, checked per SLO and
+  per window, gets no SLI, budget or burn rate, and the report says why, e.g.
+  `insufficient_requests: observed 3, required 10`.
 
 The latency SLI only counts successful requests: a fast error should not make latency look better,
-and errors already count against availability.
+and errors already count against availability. During an outage, latency can therefore lack data
+while availability does not.
 
 ### Severity
 
 Each rule either fires, does not fire, or cannot be evaluated because a window it needs has fewer
 than `min_requests` valid requests. An SLO's tag is the worst outcome of its rules, and the report's
-overall tag is the worst across SLOs, in the order `critical` > `warning` > `unknown` > `ok`.
+overall tag is the worst across SLOs, in the order `critical` > `warning` > `unknown` > `ok`. A
+window that cannot be evaluated keeps its reason in the report even when another rule sets a higher
+tag. Stale data, for example, leaves the recent windows empty while the SLO window can still show an
+overspent budget: the result is then `warning`, with the empty windows still listed and explained.
 
 | Tag | When (values from the example policy) | Typical handling, outside this tool |
 |---|---|---|
 | `critical` | Burn rate ≥ 14.4 over **both** the last 1h and the last 5m | Page on-call |
 | `warning` | Burn rate ≥ 6 over both the last 6h and the last 30m, **or** 25% or less of the budget left | Ticket or team channel |
-| `unknown` | Too few valid requests to judge: in the SLO window, or in a window a rule needs | Check the telemetry pipeline |
+| `unknown` | Too few valid requests to judge: in the SLO window, or in a window a rule needs | Check whether requests are arriving and telemetry is flowing |
 | `ok` | None of the above | Nothing |
 
 - The burn-rate rules are the multiwindow, multi-burn-rate alerts from the Google SRE Workbook. The
@@ -158,7 +170,8 @@ overall tag is the worst across SLOs, in the order `critical` > `warning` > `unk
   system.
 
 The report also answers "is the service within its objective?" with `within_objective`: `false` if
-any SLO is not met, `null` if any SLO lacks the data to judge, and `true` otherwise.
+any SLO is not met, `null` if any SLO lacks the data to judge, and `true` otherwise. It depends only
+on each SLO's own window, never on whether the shorter alert windows have enough data.
 
 ### Edge cases
 
@@ -170,10 +183,11 @@ any SLO is not met, `null` if any SLO lacks the data to judge, and `true` otherw
   includes its boundary: SLI ≥ objective, burn rate ≥ threshold, budget left ≤ warning level,
   latency ≤ threshold. A record exactly at `end` is inside the window; one exactly at
   `end - window` is not.
-- **Missing data.** A window with fewer than `min_requests` valid requests is not judged and yields
-  `unknown`. In request records, "no traffic" and "telemetry stopped" look the same, so the tool says
-  it cannot tell instead of guessing. A missing `latency_ms` is fine on a failed request and invalid
-  on a successful one.
+- **Missing data.** A window with fewer than `min_requests` valid requests is not judged; its
+  reason is reported, and the tag is `unknown` unless another rule gives `warning` or `critical`.
+  In request records, "no traffic" and "telemetry stopped" look the same, so an empty window is
+  never treated as proof of either: the tool says it cannot tell instead of guessing. A missing
+  `latency_ms` is fine on a failed request and invalid on a successful one.
 - **Empty window.** No records in the window, or an empty file, gives `unknown`. It is never
   reported as 100% healthy, and never as a breach.
 - **Invalid input** is rejected with a clear message and an exit code separate from the four tags.
@@ -197,7 +211,8 @@ any SLO is not met, `null` if any SLO lacks the data to judge, and `true` otherw
     SLO at all; a short window not shorter than its long window; a long window longer than the SLO
     window.
   - Records: a line that is not valid UTF-8, starts with a BOM, is not valid JSON or is not a JSON
-    object; `NaN` or `Infinity`; a number too large to decode; a missing `timestamp` or `success`;
+    object; a duplicate field (rather than letting the last value silently win); `NaN` or
+    `Infinity`; a number too large to decode; a missing `timestamp` or `success`;
     a timestamp that is not ISO 8601, has no timezone, has more than 6 fractional-second digits, or
     is out of range once converted to UTC; a `success` that is not `true` or `false`; a latency that
     is negative or not a number, or missing when `success` is `true`.
