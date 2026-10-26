@@ -42,6 +42,9 @@ build: ## Build dist/slo-eval.pyz (stdlib zipapp) and smoke-test it
 	$(PYTHON) -m zipapp build/zipapp --main 'slo_eval.__main__:run' \
 		--python '/usr/bin/env python3' --compress --output $(ARTIFACT)
 	./$(ARTIFACT) --version
+	./$(ARTIFACT) --policy examples/policy.toml --records examples/sample.jsonl \
+		--at 2026-10-23T14:00:57Z --format text >/dev/null; status=$$?; \
+		[ $$status -eq 2 ] || { echo "smoke test: expected exit 2 (critical), got $$status" >&2; exit 1; }
 
 clean: ## Remove build outputs and caches (keeps .venv)
 	rm -rf build dist .pytest_cache .ruff_cache

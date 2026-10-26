@@ -5,8 +5,8 @@ availability and latency SLIs, the remaining error budget, and whether to raise 
 
 Built for the EOC SRE take-home exercise, **Option 3: SLO, Error-Budget, and Alert Evaluator**.
 
-> Work in progress: the [design](#design) below is the specification; the evaluator is being
-> implemented step by step. Usage, example output and known limitations follow with the CLI.
+> Work in progress: the evaluator and the CLI are complete. Generated example scenarios, and the
+> final notes on the AI-assisted process, time spent and limitations, come next.
 
 ## Requirements
 
@@ -18,8 +18,56 @@ Built for the EOC SRE take-home exercise, **Option 3: SLO, Error-Budget, and Ale
 ```bash
 make check                      # creates .venv with pinned dev tools, lints, runs the tests
 make build                      # builds dist/slo-eval.pyz and smoke-tests it
-./dist/slo-eval.pyz --version
+./dist/slo-eval.pyz --policy examples/policy.toml --records examples/sample.jsonl \
+    --at 2026-10-23T14:00:57Z --format text   # exits 2: critical
 ```
+
+## Usage
+
+```
+slo-eval --policy PATH --records PATH [--at TIME] [--format json|text] [--output PATH]
+```
+
+| Option | Meaning |
+|---|---|
+| `--policy PATH` | Service policy (TOML) |
+| `--records PATH` | Request records (JSON Lines), or `-` to read them from stdin |
+| `--at TIME` | Evaluation time: ISO 8601 with a timezone, same rules as record timestamps. Default: now |
+| `--format json\|text` | Report format. Default: `json` |
+| `--output PATH` | Write the report to this file instead of stdout |
+
+Without `--at`, the evaluation time is the current time, so the result depends on when the tool
+runs; pass `--at` for reproducible runs, as the tests and examples do.
+
+**Exit codes**
+
+| Code | Meaning |
+|---|---|
+| `0` | Completed report: `ok` |
+| `1` | Completed report: `warning` |
+| `2` | Completed report: `critical` |
+| `3` | Completed report: `unknown` |
+| `4` | Cannot evaluate as requested: invalid policy, records or arguments, an output path that is an input, or a report that cannot be delivered |
+| `5` | Internal error, i.e. a bug; details on stderr |
+
+Codes 1 to 3 are completed reports, not failures, and are written exactly like `0`; only 4 and 5
+mean the run failed. Command-line mistakes exit 4 rather than Python's default 2, which would read
+as `critical`, and crashes exit 5 rather than the default 1, which would read as `warning`.
+
+**Output guarantees**
+
+- No report is emitted before validation, evaluation, decision and rendering have all completed,
+  so a failed run never produces a partial report.
+- `--output` is replaced atomically: the report is written to a temporary file in the same
+  directory and renamed over the target, so readers see either the previous report or the new one.
+  This is not crash-durable storage; a power loss around the rename is not covered.
+- A replaced file keeps its permission bits, and a new one gets the usual permissions from the
+  umask, so a dashboard running as another user can still read it.
+- An `--output` that is the policy or the records file, even through a link, is refused.
+- When a run fails, a previous `--output` file is left untouched; consumers should check its
+  `evaluated_at` to notice a stale report.
+- Delivery to stdout cannot be atomic: if the reader goes away part way, e.g. a closed pipe, the
+  run exits 4.
 
 ## Make targets
 
@@ -31,7 +79,7 @@ make build                      # builds dist/slo-eval.pyz and smoke-tests it
 | `make lint`    | Check lint and formatting without changing files                      |
 | `make test`    | Run the test suite                                                    |
 | `make check`   | `lint` + `test` (what CI runs)                                        |
-| `make build`   | Build the single-file artifact `dist/slo-eval.pyz` and smoke-test it  |
+| `make build`   | Build the single-file artifact `dist/slo-eval.pyz` and smoke-test it; the sample must exit 2 (critical) |
 | `make clean`   | Remove build outputs and caches (keeps `.venv`)                       |
 
 ## CI
@@ -70,7 +118,7 @@ next to the reason it was chosen. Like the records, the file is UTF-8 without a 
 | `[alerts]` `budget_warning_remaining` | Warn when this share of the budget or less is left, e.g. `0.25`; at least 0 and below 1 |
 
 Every field is required except `threshold_ms`, which only the latency SLO takes, and unexpected
-fields are rejected, so a typo cannot pass silently. Two rules are deliberate choices:
+fields are rejected, so a typo cannot pass silently. Three rules are deliberate choices:
 
 - **Naming convention.** `service` and `environment` use ASCII letters, digits, `.`, `_` and `-`,
   starting with a letter or digit. Strictly, only `:` has to be excluded, to keep the `dedup_key`
@@ -80,6 +128,10 @@ fields are rejected, so a typo cannot pass silently. Two rules are deliberate ch
 - **Budget warning level.** At `0`, the tool warns whenever the budget is exactly exhausted or
   overspent. `1` is excluded because every evaluable window has `remaining <= 1`, so even a
   perfectly healthy service would warn.
+- **Number range.** Every number has at most 100 digits after the decimal point and a magnitude
+  below 10^101. This keeps exact conversion cheap (converting `1e-999999999` exactly would take
+  hours) and keeps every value a finite JSON number (`threshold_ms = 1e999999999` would otherwise
+  become `Infinity`).
 
 **Request records:** JSON Lines, one request per line
 ([`examples/sample.jsonl`](examples/sample.jsonl)):
@@ -264,13 +316,12 @@ alerts by service and environment to avoid two pages for one incident.
   the tool needs.
   - Policy: unreadable, not UTF-8, starting with a BOM, or malformed TOML; missing or unexpected
     fields; names outside the naming convention; a duration that is not a whole number above 0 with
-    one unit; non-finite numbers (`nan`, `inf`); an objective, burn rate or budget warning level too
-    large or too precise to convert exactly (an exponent beyond ±100, e.g. `1e-999999999`, whose
-    exact conversion would run for hours); an objective not strictly between 0 and 1; a budget
-    warning level outside `0 <= level < 1`; a zero or negative threshold or burn rate; a
-    `min_requests` that is not a whole number of at least 1; an unknown or duplicate SLO name, or no
-    SLO at all; a short window not shorter than its long window; a long window longer than the SLO
-    window.
+    one unit; non-finite numbers (`nan`, `inf`); a number outside the number range (above), e.g.
+    `objective = 1e-999999999` or `threshold_ms = 1e999999999`; an objective not strictly between
+    0 and 1; a budget warning level outside `0 <= level < 1`; a zero or negative threshold or burn
+    rate; a `min_requests` that is not a whole number of at least 1; an unknown or duplicate SLO
+    name, or no SLO at all; a short window not shorter than its long window; a long window longer
+    than the SLO window.
   - Records: a line that is not valid UTF-8, starts with a BOM, is not valid JSON or is not a JSON
     object; a duplicate field (rather than letting the last value silently win); `NaN` or
     `Infinity`; a number too large to decode; a missing `timestamp` or `success`;
@@ -280,12 +331,27 @@ alerts by service and environment to avoid two pages for one incident.
 
 ### Output
 
-A JSON report by default, or a short text summary. It contains the evaluation window and record
-counts, `within_objective`, and for each SLO the SLI, objective, whether it is met, the error
-budget, the burn rates and the decision described above; an `alert` block lists the SLOs that are
-alerts, with the overall severity. Values stay exact until this point and are only formatted here,
-as decimals and percentages. The exit code follows the overall tag: `0` ok, `1` warning,
-`2` critical, `3` unknown.
+A JSON report by default, or a short text report with `--format text`. The JSON report starts with
+`schema_version`, the version of the report format, kept separate from the tool's own version under
+`generator`. Then come the evaluation window and record counts, the overall `severity`,
+`within_objective`, an `alert` block, and one entry per SLO with its numbers and decision. Each SLO
+entry repeats `service`, `environment` and `evaluated_at`, so it can be forwarded on its own.
+
+Values stay exact until they are written here:
+
+- **JSON** uses ordinary numbers without deliberate rounding, but a float cannot always hold the
+  exact value: a burn rate just below 14.4 can become the same float as 14.4. Consumers must treat
+  `met`, rule `outcome` and `severity` as authoritative, not recompute decisions from the numbers.
+  JSON never contains `NaN` or `Infinity`: the number range keeps every value finite, and the
+  writer refuses non-finite values as a last guard.
+- **Text** rounds for reading, working from the exact values. When rounding would hide which side
+  of a threshold a value is on, it shows up to four more digits; beyond that it says so instead,
+  e.g. `1h burn ≈ 14.40× (below threshold)`. This works in both directions: a burn rate fires at
+  or above its threshold, the remaining budget at or below its level, and an SLI meets its
+  objective at or above it.
+
+The exit code follows the overall tag, `0` ok, `1` warning, `2` critical, `3` unknown; see
+[Usage](#usage) for runs that fail.
 
 ### Assumptions
 

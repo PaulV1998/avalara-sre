@@ -24,6 +24,7 @@ src = ["src"]
 
 [tool.ruff.lint]
 select = ["E", "W", "F", "I", "B", "UP", "SIM", "PT", "RUF"]
+allowed-confusables = ["×"]
 
 [tool.pytest.ini_options]
 pythonpath = ["src"]

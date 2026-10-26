@@ -102,7 +102,7 @@ def _reject_duplicate_fields(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
 
 def _check_fields(data: Mapping[str, Any]) -> Record:
     problems: list[str] = []
-    timestamp = _field(data, "timestamp", _timestamp, problems)
+    timestamp = _field(data, "timestamp", parse_timestamp, problems)
     success = _field(data, "success", _success, problems)
     latency_ms = data.get("latency_ms")
     if latency_ms is not None:
@@ -130,7 +130,7 @@ def _field(
         return None
 
 
-def _timestamp(value: object) -> datetime:
+def parse_timestamp(value: object) -> datetime:
     if not isinstance(value, str):
         raise ValueError(f"must be an ISO 8601 timestamp, got {describe(value)}")
     try:

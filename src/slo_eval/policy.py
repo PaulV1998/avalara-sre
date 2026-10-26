@@ -259,6 +259,9 @@ def _number(value: object) -> int | Decimal:
         raise ValueError(f"must be a number, got {describe(value)}")
     if isinstance(value, Decimal) and not value.is_finite():
         raise ValueError(f"must be a finite number, got {describe(value)}")
+    exact = Decimal(value)
+    if exact.as_tuple().exponent < -_MAX_EXPONENT or exact.adjusted() > _MAX_EXPONENT:
+        raise ValueError(f"is too large or too precise to use exactly, got {describe(value)}")
     return value
 
 
@@ -269,28 +272,22 @@ def _positive_number(value: object) -> int | Decimal:
     return number
 
 
-def _fraction(number: int | Decimal) -> Fraction:
-    if isinstance(number, Decimal) and abs(number.as_tuple().exponent) > _MAX_EXPONENT:
-        raise ValueError(f"is too large or too precise to use exactly, got {describe(number)}")
-    return Fraction(number)
-
-
 def _objective(value: object) -> Fraction:
     number = _number(value)
     if not 0 < number < 1:
         raise ValueError(f"must be strictly between 0 and 1, got {describe(value)}")
-    return _fraction(number)
+    return Fraction(number)
 
 
 def _budget_level(value: object) -> Fraction:
     number = _number(value)
     if not 0 <= number < 1:
         raise ValueError(f"must be at least 0 and less than 1, got {describe(value)}")
-    return _fraction(number)
+    return Fraction(number)
 
 
 def _burn_rate(value: object) -> Fraction:
-    return _fraction(_positive_number(value))
+    return Fraction(_positive_number(value))
 
 
 def _min_requests(value: object) -> int:

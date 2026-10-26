@@ -167,6 +167,7 @@ def test_budget_warning_level_zero_is_allowed() -> None:
         ("threshold_ms = 300", "threshold_ms = 0.5"),
         ("objective = 0.999", "objective = 1e-100"),
         ("burn_rate = 14.4", "burn_rate = 1e100"),
+        ("threshold_ms = 300", "threshold_ms = 1e100"),
     ],
 )
 def test_boundary_values_that_are_allowed(old: str, new: str) -> None:
@@ -417,6 +418,23 @@ def test_each_missing_field_is_one_problem(line: str, path: str) -> None:
             "budget_warning_remaining = 0.25",
             "budget_warning_remaining = 1e-101",
             f"alerts.budget_warning_remaining: {EXACT_RULE}, got 1E-101",
+        ),
+        (
+            "threshold_ms = 300",
+            "threshold_ms = 1e999999999",
+            f"slo[1].threshold_ms: {EXACT_RULE}, got 1E+999999999",
+        ),
+        pytest.param(
+            "threshold_ms = 300",
+            "threshold_ms = 1" + "0" * 101,
+            f"slo[1].threshold_ms: {EXACT_RULE}, got 1{'0' * 36}...",
+            id="102-digit threshold_ms",
+        ),
+        pytest.param(
+            "burn_rate = 6",
+            "burn_rate = " + "9" * 400 + ".5",
+            f"alerts.warning.burn_rate: {EXACT_RULE}, got {'9' * 37}...",
+            id="400-digit burn_rate",
         ),
     ],
 )
