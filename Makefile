@@ -1,16 +1,18 @@
 # Build, test and packaging workflow.
 # Requires only python3 (>= 3.11) and make; dev tools are installed into .venv from pinned versions.
 
-PYTHON   ?= python3
-VENV     := .venv
-BIN      := $(VENV)/bin
-ARTIFACT := dist/slo-eval.pyz
+PYTHON     ?= python3
+VENV       := .venv
+BIN        := $(VENV)/bin
+ARTIFACT   := dist/slo-eval.pyz
+SCENARIOS  := examples/scenarios
+EXAMPLE_AT := 2026-10-23T14:00:00Z
 
 .DEFAULT_GOAL := help
-.PHONY: help install fmt lint test check build clean
+.PHONY: help install fmt lint test check build examples run-example clean
 
 help: ## List available targets
-	@grep -E '^[a-z-]+:.*## ' $(MAKEFILE_LIST) | awk -F ':.*## ' '{printf "  %-8s %s\n", $$1, $$2}'
+	@grep -E '^[a-z-]+:.*## ' $(MAKEFILE_LIST) | awk -F ':.*## ' '{printf "  %-12s %s\n", $$1, $$2}'
 
 install: $(VENV)/.installed ## Create .venv with pinned dev tools (pytest, ruff)
 
@@ -46,6 +48,20 @@ build: ## Build dist/slo-eval.pyz (stdlib zipapp) and smoke-test it
 		--at 2026-10-23T14:00:57Z --format text >/dev/null; status=$$?; \
 		[ $$status -eq 2 ] || { echo "smoke test: expected exit 2 (critical), got $$status" >&2; exit 1; }
 
-clean: ## Remove build outputs and caches (keeps .venv)
-	rm -rf build dist .pytest_cache .ruff_cache
-	find src tests -name __pycache__ -prune -exec rm -rf {} +
+examples: ## Generate the example scenarios into examples/scenarios (not committed)
+	rm -rf $(SCENARIOS)
+	$(PYTHON) scripts/generate_examples.py --end $(EXAMPLE_AT) --out $(SCENARIOS)
+
+run-example: build examples ## Evaluate every example scenario with the artifact (SCENARIO=name for one)
+	@for file in $(if $(SCENARIO),$(SCENARIOS)/$(SCENARIO).jsonl,$(SCENARIOS)/*.jsonl); do \
+		[ -f "$$file" ] || { echo "run-example: unknown scenario $$file" >&2; exit 1; }; \
+		echo "=== $$(basename "$$file" .jsonl) ==="; \
+		code=0; ./$(ARTIFACT) --policy examples/policy.toml --records "$$file" \
+			--at $(EXAMPLE_AT) --format text || code=$$?; \
+		echo "exit code: $$code"; echo; \
+		[ $$code -le 3 ] || { echo "run-example: $$file failed with exit code $$code" >&2; exit 1; }; \
+	done
+
+clean: ## Remove build outputs, caches and generated examples (keeps .venv)
+	rm -rf build dist .pytest_cache .ruff_cache $(SCENARIOS)
+	find src tests scripts -name __pycache__ -prune -exec rm -rf {} +

@@ -5,8 +5,8 @@ availability and latency SLIs, the remaining error budget, and whether to raise 
 
 Built for the EOC SRE take-home exercise, **Option 3: SLO, Error-Budget, and Alert Evaluator**.
 
-> Work in progress: the evaluator and the CLI are complete. Generated example scenarios, and the
-> final notes on the AI-assisted process, time spent and limitations, come next.
+> Work in progress: the evaluator, the CLI and the example scenarios are complete. The final notes
+> on the AI-assisted process, time spent and limitations come next.
 
 ## Requirements
 
@@ -69,6 +69,111 @@ as `critical`, and crashes exit 5 rather than the default 1, which would read as
 - Delivery to stdout cannot be atomic: if the reader goes away part way, e.g. a closed pipe, the
   run exits 4.
 
+## Examples
+
+```bash
+make examples                        # writes examples/scenarios/*.jsonl, ~10 MB each, not committed
+make run-example                     # evaluates all seven with the built artifact
+make run-example SCENARIO=2-outage   # evaluates one
+```
+
+`make run-example` evaluates at a fixed time, `2026-10-23T14:00:00Z`, prints each text report with
+its exit code, accepts the completed-report codes 0 to 3, and fails on 4 or 5 or on an unknown
+scenario name. [`scripts/generate_examples.py`](scripts/generate_examples.py) writes the scenarios;
+it uses only the standard library and is not part of the artifact.
+
+**Shared traffic.** One request every 20 seconds covers exactly the 30-day window: the first at
+`end - 30d + 20s`, the last at `end`, 129,600 in total, so every 5-minute window holds 15 requests,
+every 30-minute window 90 and every hour 180. Everything is positioned relative to `end`, so a
+different `--end` shifts the timestamps but never the counts.
+
+- Background failures: requests 0, 5,000, 10,000, … counted from the oldest, 26 in total, using
+  about 20.06% of the availability budget.
+- Background slow requests: every 400th successful request, starting with the first, 324 in total,
+  using about 25.005% of the latency budget. Failures take precedence: a failed request never
+  counts toward the slow cadence.
+- A scenario's own pattern replaces the background pattern of the same kind during its period.
+- Latency values come from a seeded generator using only `random()`, whose sequence Python keeps
+  stable across versions: 40 to 250 ms for fast requests, 301 to 2,000 ms for slow ones. Failures
+  and slow requests follow fixed patterns, so every count, and every result below, is exact.
+
+| Scenario | What happens | Result | Exit |
+|---|---|---|---|
+| `1-healthy` | Background traffic only | Both SLOs `ok`, within objective | 0 |
+| `2-outage` | Every request fails for the last 45 minutes: 135 failures | Availability `critical`: 750× burn over 1h, 1,000× over 5m. Latency `ok`: its 1h window still holds 45 successes, which rules the fast burn out, and its empty 5m and 30m windows are reported as gaps | 2 |
+| `3-elevated-errors` | One failure every 30 minutes for the last 8 hours, about 1.1% | Availability `warning` from the slow burn, exactly 100/9 ≈ 11.11× over 6h and 30m. The fast burn is ruled out because the 1h burn is also ≈11.11×, below 14.4×. Still within objective | 1 |
+| `4-latency-regression` | A release 7 days ago makes every 30th successful request slow, replacing the background pattern | Latency `warning` from the low budget alone: 1,257 slow requests leave about 2.99% of the budget. Burn is about 3.33× over 30m, 1h and 6h and 0× over 5m, where no slow request falls (one would make it about 6.67×), all below both burn thresholds. SLI about 99.03%, still within objective | 1 |
+| `5-past-incident` | 2 hours at 50% failures starting 10 days ago, 180 failures, since recovered | Availability `warning`: 206 failures against 129.6 allowed overspend the budget, but the recent windows are clean, so nothing pages | 1 |
+| `6-telemetry-stopped-20m` | The newest 60 records, 20 minutes, are missing | Both SLOs `ok`, each listing an empty 5m window | 0 |
+| `7-telemetry-stopped-2h` | The newest 360 records, 2 hours, are missing | Both SLOs `unknown`: both fast-burn windows are empty | 3 |
+
+**Telemetry gaps.** Scenarios 6 and 7 show what happens when records stop arriving. After 20
+minutes, the 1h window still holds healthy data, which rules the fast burn out, so both SLOs stay
+`ok` and the empty 5m window is listed as a gap. After 2 hours, both fast-burn windows are empty,
+the rule cannot be evaluated, and the result is `unknown` with exit code 3. `ok` therefore means
+that no alert condition is established, not that telemetry is complete: detecting stale telemetry
+quickly belongs to a separate freshness check, which could use these gap diagnostics.
+
+**Low traffic.** Scenario 3 originally used about 0.8% errors, but at 90 requests per 30 minutes
+that expects only 0.72 failures per window, so many 30-minute windows would hold none and rule the
+slow burn out. With little traffic, short windows are coarse.
+
+Two of the reports, as `make run-example` prints them. The outage needs action now:
+
+```
+checkout-api (prod): CRITICAL at 2026-10-23T14:00:00Z
+window 30d: 129,600 records in it, 0 before it, 0 after its end
+within objective: no
+
+availability: CRITICAL
+  SLI 99.876% of 129,600 requests (objective 99.9%, missed)
+  fast_burn   firing           1h burn 750.00×, 5m burn 1,000.00× (threshold 14.4×)
+  slow_burn   firing           6h burn 125.00×, 30m burn 1,000.00× (threshold 6×)
+  low_budget  firing           30d budget left -24.2% (threshold 25%)
+  impact: Customers see errors when checking out and cannot complete their order. 135 of 180 requests failed in the 1h window.
+  next action: Investigate immediately: elevated budget consumption was observed in the recent evaluation windows. Follow the runbook.
+  runbook: https://runbooks.example.com/checkout-api#availability
+  dedup key: checkout-api:prod:availability
+
+latency: OK
+  SLI 99.750% of 129,439 successful requests (objective 99%, met)
+  fast_burn   not_firing       1h burn 0.00×, 5m no data (insufficient_requests: observed 0, required 10) (threshold 14.4×)
+  slow_burn   not_firing       6h burn 0.21×, 30m no data (insufficient_requests: observed 0, required 10) (threshold 6×)
+  low_budget  not_firing       30d budget left 75.0% (threshold 25%)
+  runbook: https://runbooks.example.com/checkout-api#latency
+  dedup key: checkout-api:prod:latency
+  gap: fast_burn 5m window: insufficient_requests: observed 0, required 10
+  gap: slow_burn 30m window: insufficient_requests: observed 0, required 10
+exit code: 2
+```
+
+The latency regression is a warning while the SLO is still met:
+
+```
+checkout-api (prod): WARNING at 2026-10-23T14:00:00Z
+window 30d: 129,600 records in it, 0 before it, 0 after its end
+within objective: yes
+
+availability: OK
+  SLI 99.980% of 129,600 requests (objective 99.9%, met)
+  fast_burn   not_firing       1h burn 0.00×, 5m burn 0.00× (threshold 14.4×)
+  slow_burn   not_firing       6h burn 0.00×, 30m burn 0.00× (threshold 6×)
+  low_budget  not_firing       30d budget left 79.9% (threshold 25%)
+  runbook: https://runbooks.example.com/checkout-api#availability
+  dedup key: checkout-api:prod:availability
+
+latency: WARNING
+  SLI 99.030% of 129,574 successful requests (objective 99%, met)
+  fast_burn   not_firing       1h burn 3.33×, 5m burn 0.00× (threshold 14.4×)
+  slow_burn   not_firing       6h burn 3.33×, 30m burn 3.33× (threshold 6×)
+  low_budget  firing           30d budget left 3.0% (threshold 25%)
+  impact: Checkout is slow; customers may abandon their cart. 1,257 of 129,574 successful requests exceeded 300 ms in the 30d window.
+  next action: Review recent incidents and budget consumption; follow the team's release/error-budget policy.
+  runbook: https://runbooks.example.com/checkout-api#latency
+  dedup key: checkout-api:prod:latency
+exit code: 1
+```
+
 ## Make targets
 
 | Target         | Description                                                           |
@@ -80,7 +185,9 @@ as `critical`, and crashes exit 5 rather than the default 1, which would read as
 | `make test`    | Run the test suite                                                    |
 | `make check`   | `lint` + `test` (what CI runs)                                        |
 | `make build`   | Build the single-file artifact `dist/slo-eval.pyz` and smoke-test it; the sample must exit 2 (critical) |
-| `make clean`   | Remove build outputs and caches (keeps `.venv`)                       |
+| `make examples` | Generate the seven example scenarios into `examples/scenarios` (not committed) |
+| `make run-example` | Evaluate every scenario with the artifact, or one with `SCENARIO=name`; fails on exit code 4 or 5 |
+| `make clean`   | Remove build outputs, caches and generated examples (keeps `.venv`)   |
 
 ## CI
 
