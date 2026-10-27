@@ -12,6 +12,9 @@ __pycache__/
 build/
 dist/
 
+# Generated example scenarios (make examples)
+examples/scenarios/
+
 # OS / editors
 .DS_Store
 .vscode/
