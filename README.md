@@ -5,8 +5,24 @@ availability and latency SLIs, the remaining error budget, and whether to raise 
 
 Built for the EOC SRE take-home exercise, **Option 3: SLO, Error-Budget, and Alert Evaluator**.
 
-> Work in progress: the evaluator, the CLI and the example scenarios are complete. The final notes
-> on the AI-assisted process, time spent and limitations come next.
+## Project layout
+
+The tool is a pipeline of small steps: `load_policy` and `load_records` → `evaluate` → `decide` →
+`render_json` or `render_text`. Only the two ends touch files, the clock or the process; the
+evaluation and the decision are pure functions of their inputs.
+
+| Path | Contents |
+|---|---|
+| `src/slo_eval/policy.py` | Reads and checks the service policy (TOML) |
+| `src/slo_eval/records.py` | Reads and checks the request records (JSON Lines) |
+| `src/slo_eval/evaluator.py` | SLIs, error budgets and burn rates at one evaluation time |
+| `src/slo_eval/decision.py` | Rule outcomes, severity tags, diagnostics and alerts |
+| `src/slo_eval/report.py` | JSON and text reports |
+| `src/slo_eval/cli.py` | Command line, evaluation time, output delivery and exit codes |
+| `src/slo_eval/errors.py` | The input error type, and how bad values are shown in messages |
+| `scripts/generate_examples.py` | Generates the seven example scenarios; not part of the artifact |
+| `examples/` | The example policy and a 12-line sample; generated scenarios go to `examples/scenarios/` |
+| `tests/` | One test module per source module, plus `test_examples.py` for the scenarios end to end |
 
 ## Requirements
 
@@ -18,9 +34,13 @@ Built for the EOC SRE take-home exercise, **Option 3: SLO, Error-Budget, and Ale
 ```bash
 make check                      # creates .venv with pinned dev tools, lints, runs the tests
 make build                      # builds dist/slo-eval.pyz and smoke-tests it
+make run-example                # generates the seven example scenarios and evaluates each
 ./dist/slo-eval.pyz --policy examples/policy.toml --records examples/sample.jsonl \
     --at 2026-10-23T14:00:57Z --format text   # exits 2: critical
 ```
+
+The artifact is a single file that runs anywhere with Python 3.11+, as `./dist/slo-eval.pyz` or
+`python3 dist/slo-eval.pyz`. `pip install .` installs the same tool as a `slo-eval` command.
 
 ## Usage
 
@@ -173,6 +193,31 @@ latency: WARNING
   dedup key: checkout-api:prod:latency
 exit code: 1
 ```
+
+## Tests
+
+```bash
+make test                                            # the whole suite, about 15 seconds
+.venv/bin/python -m pytest tests/test_evaluator.py   # one module
+```
+
+348 tests, none of which need a network or a live service. Most of the time goes to
+`test_examples.py`, which generates the seven 30-day scenarios once per run, in pytest's temporary
+directories, and evaluates them. Expected values are written out by hand, as exact fractions where
+the maths is exact, rather than derived from the code under test.
+
+| Case | What is checked | Where |
+|---|---|---|
+| Passing | An SLO met with budget left; the healthy scenario | `test_evaluator.py`, `test_examples.py` |
+| Failing | An SLO missed, with an overspent budget that is never clamped; the outage and past-incident scenarios | `test_evaluator.py`, `test_examples.py` |
+| Boundaries | An SLI exactly at its objective; a latency exactly at the threshold; a burn rate of 14.4 fires and 14.39 does not; 25% and 24.99% budget left fire and 25.01% does not; a record exactly at `end` is in and one exactly at `end - window` is out; exactly `min_requests` is judged and one fewer is not; a daylight-saving change | `test_evaluator.py`, `test_decision.py` |
+| Missing data and empty windows | No records, or only records outside the window; latency during a full outage; one burn-rate window empty, in each direction; stale data; telemetry stopping for 20 minutes and for 2 hours | `test_evaluator.py`, `test_decision.py`, `test_examples.py` |
+| Invalid input | Every policy rule, with exact messages and no cascades; every record rule, with line numbers and totals; a BOM, duplicate keys, `NaN`, numbers too large or too precise; a bad `--at` | `test_policy.py`, `test_records.py`, `test_cli.py` |
+| Decisions and alerts | Each tag and rule; rule precedence; summary, impact, next action and `dedup_key`; every SLO identifiable whether it alerts or not | `test_decision.py` |
+| Reports | JSON fields; no `NaN` or `Infinity`; a value that becomes the threshold as a float keeping its exact decision; text that keeps each value on the correct side of its threshold | `test_report.py` |
+| CLI and output | Exit codes 0 to 5, including usage errors (4, not 2) and crashes (5, not 1); `--output` replaced for every completed report and left untouched by a failed run; permissions; inputs never overwritten; a closed pipe; stdin | `test_cli.py` |
+| End to end | Each scenario's record counts, exact measurements, gaps, decisions and exit codes | `test_examples.py` |
+| Artifact | `make build` runs the packaged `.pyz` on the sample and requires exit code 2 | `Makefile` |
 
 ## Make targets
 
@@ -468,3 +513,103 @@ The exit code follows the overall tag, `0` ok, `1` warning, `2` critical, `3` un
 - `timestamp` is when the request completed, i.e. when its outcome was known.
 - Windows roll and end at the evaluation time; they are not aligned to calendar months.
 - The error budget is counted in requests, not in "bad minutes".
+
+## Running it in production
+
+This is how the output could feed a dashboard, a paging system and an incident workflow without
+paging on every transient data point.
+
+**Scheduling.** A scheduler such as cron, a Kubernetes CronJob or a CI schedule runs the tool every
+few minutes without `--at`, so each run evaluates the current time, and pipes in the records from a
+telemetry query:
+
+```bash
+query-telemetry --service checkout-api --env prod --last 30d \
+  | slo-eval --policy policies/checkout-api-prod.toml --records - \
+      --output /var/lib/slo/checkout-api-prod.json
+```
+
+`query-telemetry` stands for whatever exports the records. Exit codes 0 to 3 are decisions and feed
+alerting; 4 and 5 mean the job itself failed, which goes to whoever owns the SLO tooling rather than
+to the service's on-call.
+
+**Dashboards.** The `--output` file is replaced atomically, so a dashboard can read it at any time
+and show the severity, budget, burn rates and gap diagnostics, using `evaluated_at` to flag a stale
+report. For trends, each run can also publish its numbers as metrics labelled by service,
+environment and SLO, such as the SLI, the budget left and the burn rate per window.
+
+**Paging and incidents.** Each SLO decision becomes one event keyed by its `dedup_key`, read as
+described in [Alerts and integrations](#alerts-and-integrations): `critical` pages, `warning` opens
+or updates a ticket, `ok` can resolve, and `unknown` changes nothing. A severity change updates the
+same incident, and the paging system can group a service's SLOs so that one outage sends one page.
+
+**Not paging on every transient data point.**
+
+- A burn-rate rule needs both its long and its short window at the threshold, so a 5-minute spike
+  alone cannot fire it, and the alert clears soon after recovery.
+- Only `fast_burn` pages; a slower burn or a low budget becomes a ticket.
+- A window with fewer than `min_requests` requests has no burn rate, so a handful of requests cannot
+  fire a rule.
+- `unknown` never pages and never resolves.
+- The tool is stateless, so anything that needs history, such as requiring two consecutive
+  `critical` runs before paging, belongs in the paging system.
+
+**Watching the watcher.** A broken evaluator looks like silence, so alert on the job itself: when
+the report's `evaluated_at` is older than a few intervals, and when runs keep exiting with 4 or 5.
+Because `ok` does not prove that telemetry is complete, a separate freshness check should alert
+when records stop arriving.
+
+## What a production version would add
+
+- **Counts instead of raw records.** Holding 30 days of raw requests does not scale, and monitoring
+  systems already store counts. The evaluation only needs valid and good counts per SLO and window,
+  so the change is an adapter behind a small interface such as `counts(slo, start, end)`,
+  implemented by today's records reader and by a monitoring-system client: for example, Prometheus
+  queries over request counters and latency histogram buckets, where `threshold_ms` must match a
+  bucket boundary. The rules, decisions and reports stay the same, and tests keep using in-memory
+  fakes, so the CLI stays easy to test.
+- **Time-series storage of results**, so budget trends, time to exhaustion and past decisions can be
+  queried during and after an incident.
+- **Many services per run**, from a directory of policies, where one bad policy fails only its own
+  service.
+- **Configuration validation in CI.** A `--check-policy` mode run on every change to the policies,
+  so a mistake fails review instead of a 3 a.m. evaluation, and ownership and escalation details in
+  each policy.
+- **A telemetry-freshness alert**, separate from the SLO rules.
+- **More rules and windows:** a third, long-term ticket rule such as 1× over 3 days, as in the Google
+  SRE Workbook; calendar-month windows for reporting; per-endpoint or per-customer-tier SLOs.
+- **Request IDs**, so duplicate records can be detected.
+- **Packaging and operation:** a wheel or container image, and structured logs and metrics for the
+  tool's own runs.
+
+## Known limitations and shortcuts
+
+- **Raw records in memory.** Every record is loaded, and each window is a separate pass over them.
+  A 30-day scenario of 129,600 records takes about 0.7 seconds and 57 MB at peak, but a service at
+  100 requests per second produces about 259 million records in 30 days, far more than this design
+  should hold in memory. Counts from a monitoring system, above, remove the limit.
+- **One service and environment per run**, with rolling windows only. Budgets are counted in
+  requests, not in "bad minutes", so an outage during a quiet hour costs less budget than the same
+  outage during a busy one.
+- **Trusted inputs.** `success` is decided upstream, records are assumed to be filtered to the
+  policy's service and environment, and duplicates cannot be detected without request IDs.
+- **One `min_requests` for every window.** At low traffic, short windows are coarse or lack data,
+  so a quiet night can leave the 5-minute window unevaluable. A minimum per window, or one scaled to
+  the window's length, would fit better.
+- **`ok` is not a freshness check.** It means that no alert condition is established; telemetry
+  that stops can stay `ok` for a while, as scenario 6 shows.
+- **Output.** `--output` is replaced atomically but not durably: there is no `fsync`, so a power
+  loss around the rename is not covered. Delivery to stdout cannot be atomic. JSON numbers are
+  floats, so consumers must use the decisions rather than recompute them.
+- **Deliberate input limits.** Policy numbers have at most 100 decimal places and stay below
+  10^101, timestamps have at most 6 fractional-second digits, and both files are UTF-8 without a
+  BOM.
+- **Platforms.** Developed on macOS; CI runs Ubuntu with Python 3.11 and 3.13 only. Windows is not
+  tested, and its file permissions and symbolic links behave differently.
+- **Synthetic examples.** Fixed failure and slow-request patterns keep every example exact, but they
+  are not realistic traffic.
+
+## Time spent
+
+About 4 to 5 hours across 3 days. The work went in small, reviewed steps,
+each its own commit on `develop`.
