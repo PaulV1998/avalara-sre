@@ -4,6 +4,7 @@ A small CLI that evaluates service reliability data against SLO targets: it calc
 availability and latency SLIs, the remaining error budget, and whether to raise an alert.
 
 Built for the EOC SRE take-home exercise, **Option 3: SLO, Error-Budget, and Alert Evaluator**.
+How AI tools were used, and how the result was verified: [AI_PROCESS.md](AI_PROCESS.md).
 
 ## Project layout
 
